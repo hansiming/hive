@@ -53,10 +53,13 @@ import org.apache.thrift.transport.TMemoryBuffer;
 
 /**
  * A Hive Table Partition: is a fundamental storage unit within a Table.
+ * 表分区：表中的基本存储单元。
  *
  * Please note that the ql code should always go through methods of this class to access the
  * metadata, instead of directly accessing org.apache.hadoop.hive.metastore.api.Partition.
  * This helps to isolate the metastore code and the ql code.
+ * 请注意，ql代码应该始终通过此类的方法来访问元数据，
+ * 而不是直接访问org.apache.hadoop.hive.metastore.api.Partition.This有助于隔离转移代码和ql代码。
  */
 public class Partition implements Serializable {
 

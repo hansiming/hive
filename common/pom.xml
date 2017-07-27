@@ -98,6 +98,11 @@
       <artifactId>json</artifactId>
       <version>${json.version}</version>
     </dependency>
+      <dependency>
+          <groupId>org.apache.hadoop</groupId>
+          <artifactId>hadoop-common</artifactId>
+          <version>RELEASE</version>
+      </dependency>
   </dependencies>
 
   <profiles>

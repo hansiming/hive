@@ -29,19 +29,12 @@ import static org.apache.hadoop.hive.serde.serdeConstants.STRING_TYPE_NAME;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
+import java.util.concurrent.*;
 
+import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -122,6 +115,7 @@ import org.apache.hadoop.util.StringUtils;
 import org.apache.thrift.TException;
 
 import com.google.common.collect.Sets;
+import org.glassfish.grizzly.threadpool.FixedThreadPool;
 
 
 /**
@@ -1398,9 +1392,9 @@ public class Hive {
         Hive.replaceFiles(tbl.getPath(), loadPath, newPartPath, oldPartPath, getConf(),
             isSrcLocal);
       } else {
-        newFiles = new ArrayList<Path>();
+        newFiles = Collections.synchronizedList(new ArrayList<Path>());
         FileSystem fs = tbl.getDataLocation().getFileSystem(conf);
-        Hive.copyFiles(conf, loadPath, newPartPath, fs, isSrcLocal, isAcid, newFiles);
+          Hive.copyFiles(conf, loadPath, newPartPath, fs, isSrcLocal, isAcid, newFiles);
       }
 
       boolean forceCreate = (!holdDDLTime) ? true : false;
@@ -1523,6 +1517,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
    * Given a source directory name of the load path, load all dynamically generated partitions
    * into the specified table and return a list of strings that represent the dynamic partition
    * paths.
+   * 给定加载路径的源目录名称，将所有动态生成的分区加载到指定的表中，并返回表示动态分区路径的字符串列表
    * @param loadPath
    * @param tableName
    * @param partSpec
@@ -1536,16 +1531,26 @@ private void constructOneLBLocationMap(FileStatus fSta,
    * @throws HiveException
    */
   public Map<Map<String, String>, Partition> loadDynamicPartitions(Path loadPath,
-      String tableName, Map<String, String> partSpec, boolean replace,
-      int numDP, boolean holdDDLTime, boolean listBucketingEnabled, boolean isAcid, long txnId)
+                                                                   String tableName, Map<String, String> partSpec, final boolean replace,
+                                                                   final int numDP, final boolean holdDDLTime, final boolean listBucketingEnabled, final boolean isAcid, long txnId)
       throws HiveException {
 
+    //传入的参数有 Path loadPath , String tableName, Map<String, String> partSpec, boolean replace, int numDP, boolean holdDDLTime
+    //boolean listBucketingEnabled, boolean isAcid, long txnId
+    //有效的分区 Set
     Set<Path> validPartitions = new HashSet<Path>();
     try {
-      Map<Map<String, String>, Partition> partitionsMap = new
+      //分区的Map
+      final Map<Map<String, String>, Partition> partitionsMap = new
           LinkedHashMap<Map<String, String>, Partition>();
 
+      //新建一个线程池
+      int poolSize = 15;
+      final ExecutorService es = Executors.newFixedThreadPool(poolSize, new ThreadFactoryBuilder().setDaemon(true).build());
+
+      //拿到FS
       FileSystem fs = loadPath.getFileSystem(conf);
+      //拿到FS下面的状态
       FileStatus[] leafStatus = HiveStatsUtils.getFileStatusRecurse(loadPath, numDP+1, fs);
       // Check for empty partitions
       for (FileStatus s : leafStatus) {
@@ -1577,24 +1582,48 @@ private void constructOneLBLocationMap(FileStatus fSta,
             + " to at least " + validPartitions.size() + '.');
       }
 
-      Table tbl = getTable(tableName);
+      final Table tbl = getTable(tableName);
       // for each dynamically created DP directory, construct a full partition spec
       // and load the partition based on that
+      final List<Future<Void>> futures = Lists.newLinkedList();
       Iterator<Path> iter = validPartitions.iterator();
       while (iter.hasNext()) {
         // get the dynamically created directory
-        Path partPath = iter.next();
+        final Path partPath = iter.next();
         assert fs.getFileStatus(partPath).isDir():
           "partitions " + partPath + " is not a directory !";
-
         // generate a full partition specification
-        LinkedHashMap<String, String> fullPartSpec = new LinkedHashMap<String, String>(partSpec);
+        final LinkedHashMap<String, String> fullPartSpec = new LinkedHashMap<String, String>(partSpec);
         Warehouse.makeSpecFromName(fullPartSpec, partPath);
-        Partition newPartition = loadPartition(partPath, tbl, fullPartSpec, replace,
-            holdDDLTime, true, listBucketingEnabled, false, isAcid);
-        partitionsMap.put(fullPartSpec, newPartition);
+
+        futures.add(es.submit(new Callable<Void>() {
+
+          @Override
+          public Void call() throws Exception {
+            try {
+              Partition newPartition = loadPartition(partPath, tbl, fullPartSpec, replace,
+                      holdDDLTime, true, listBucketingEnabled, false, isAcid);
+              partitionsMap.put(fullPartSpec, newPartition);
+            } catch (Exception e) {
+              LOG.error("Exception when loading partition with parameters "
+                      + " partPath=" + partPath + ", "
+                      + " table=" + tbl.getTableName() + ", "
+                      + " partSpec=" + fullPartSpec + ", "
+                      + " replace=" + replace + ", "
+                      + " listBucketingEnabled=" + listBucketingEnabled + ", "
+                      + " isAcid=" + isAcid, e);
+              throw e;
+            }
+            return null;
+          }
+        }));
         LOG.info("New loading path = " + partPath + " with partSpec " + fullPartSpec);
       }
+
+      for (Future f : futures) {
+        f.get();
+      }
+
       if (isAcid) {
         List<String> partNames = new ArrayList<>(partitionsMap.size());
         for (Partition p : partitionsMap.values()) {
@@ -1607,6 +1636,10 @@ private void constructOneLBLocationMap(FileStatus fSta,
       throw new HiveException(e);
     } catch (TException te) {
       throw new HiveException(te);
+    } catch (InterruptedException e) {
+      throw new HiveException(e);
+    } catch (ExecutionException e) {
+      throw new HiveException(e);
     }
   }
 
@@ -3012,7 +3045,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
    */
   @LimitedPrivate(value = {"Hive"})
   @Unstable
-  public IMetaStoreClient getMSC() throws MetaException {
+  public synchronized IMetaStoreClient getMSC() throws MetaException {
     if (metaStoreClient == null) {
       try {
         owner = UserGroupInformation.getCurrentUser();

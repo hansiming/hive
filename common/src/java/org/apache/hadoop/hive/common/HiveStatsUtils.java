@@ -49,6 +49,7 @@ public class HiveStatsUtils {
       throws IOException {
 
     // if level is <0, the return all files/directories under the specified path
+    //如果level为<0，则返回指定路径下的所有文件/目录
     if ( level < 0) {
       List<FileStatus> result = new ArrayList<FileStatus>();
       try {
