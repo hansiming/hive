@@ -68,10 +68,13 @@ public class RetryingMetaStoreClient implements InvocationHandler {
         msClientClass);
   }
 
+  //TODO err is here
   protected RetryingMetaStoreClient(HiveConf hiveConf, Class<?>[] constructorArgTypes,
       Object[] constructorArgs, Map<String, Long> metaCallTimeMap, Class<? extends IMetaStoreClient> msClientClass)
       throws MetaException {
 
+    LOG.info("Meta Store exception : hiveConf = " + hiveConf + ", constructorArgTypes = " + constructorArgTypes + ", constructorArgs = " + constructorArgs
+            + ", metaCallTimeMap = " + metaCallTimeMap + ", msClientClass" + msClientClass);
     this.retryLimit = hiveConf.getIntVar(HiveConf.ConfVars.METASTORETHRIFTFAILURERETRIES);
     this.retryDelaySeconds = hiveConf.getTimeVar(
         HiveConf.ConfVars.METASTORE_CLIENT_CONNECT_RETRY_DELAY, TimeUnit.SECONDS);
@@ -82,7 +85,11 @@ public class RetryingMetaStoreClient implements InvocationHandler {
     String msUri = hiveConf.getVar(HiveConf.ConfVars.METASTOREURIS);
     localMetaStore = (msUri == null) || msUri.trim().isEmpty();
 
+    LOG.info("Meta Store exception : this.retryLimit = " + this.retryLimit + ", this.retryDelaySeconds = " + this.retryDelaySeconds + ", this.metaCallTimeMap = " + metaCallTimeMap
+            + ", this.connectionLifeTimeInMillis = " + this.connectionLifeTimeInMillis + ", this.lastConnectionTime" + this.lastConnectionTime + ", msUri = " + msUri + ", localMetaStore = " + localMetaStore );
+
     reloginExpiringKeytabUser();
+    LOG.info("Meta Store exception : msClientClass = " + msClientClass + ", constructorArgTypes = " + constructorArgTypes + ", constructorArgs = " + constructorArgs);
     this.base = (IMetaStoreClient) MetaStoreUtils.newInstance(msClientClass, constructorArgTypes, constructorArgs);
   }
 
@@ -136,18 +143,27 @@ public class RetryingMetaStoreClient implements InvocationHandler {
         RetryingMetaStoreClient.class.getClassLoader(), baseClass.getInterfaces(), handler);
   }
 
+  //TODO
   @Override
   public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+
     Object ret = null;
     int retriesMade = 0;
     TException caughtException = null;
     while (true) {
       try {
+        //??
         reloginExpiringKeytabUser();
         if (retriesMade > 0 || hasConnectionLifeTimeReached(method)) {
+
+          LOG.info("Meta Store exception : retriesMade = " + retriesMade);
+
           base.reconnect();
           lastConnectionTime = System.currentTimeMillis();
         }
+
+
+        LOG.info("Meta Store exception : metaCallTimeMap = " + metaCallTimeMap);
         if (metaCallTimeMap == null) {
           ret = method.invoke(base, args);
         } else {
